@@ -39,7 +39,8 @@ import curses
 
 VIS_GRADIENT = " .,:;!i$@#"
 ATMOS_MIN_DELTA = 0.002
-ATMOS_MIN_PRESSURE = 0.02
+ATMOS_MIN_PRESSURE = 0.002
+ATMOS_MIN_FLOW = 0.00002
 ATMOS_UPDATES_PER_TICK = 500
 
 def get_gradient(v, l, h):
@@ -140,6 +141,9 @@ class Tile:
 	
 	def update_atmos_pres(self, tn, ts, tw, te):
 		# TODO: improve this algorithm
+		# there's a lot of "stuff i might need" in here
+		# which isn't actually used --GM
+		
 		# get flows
 		fc = self.get_pres_flow()
 		if fc == 0.0:
@@ -150,17 +154,21 @@ class Tile:
 		pc = self.get_pres()
 		pn, ps, pw, pe = (t.get_pres() for t in (tn,ts,tw,te))
 		
-		# calculate total, mean pressure
-		ptotal = pc+pn+ps+pw+pe
-		pmean = ptotal/5.0
-		
 		# calculate total flow
 		ftotal = fn+fs+fw+fe
-		if ftotal == 0.0:
+		if ftotal < ATMOS_MIN_FLOW:
 			return # don't change pressure if it can't flow adequately
 		
-		# clamp flow to this tile's flow
-		fn, fs, fw, fe = (min(fc,f) for f in (fn,fs,fw,fe))
+		# calculate total and mean pressure
+		pctotal = pn+ps+pw+pe
+		ptotal = pc+pctotal
+		pmean = ptotal/5.0
+		xftotal = fn+fs+fw+fe+1.0
+		
+		# NOTE:
+		# if fn,fs,fw,fe all == 1.0, then end result must be that pc==pn==ps==pw==pe.
+		# npc = opc - (npn-opn) - (nps-ops) - (npw-opw) - (npe-ope) = (opc+opn+ops+opw+ope)/5
+		# this ONLY applies when all flows == 1.0!	
 		
 		# get pressure contents
 		pl_air = self.get_pres_air()
@@ -168,9 +176,8 @@ class Tile:
 		pl_toxins = self.get_pres_toxins()
 		pl_heat = self.get_heat() # TODO: split this into pressure and heat?
 		
-		# delegate
 		for t,p,f in zip((tn,ts,tw,te),(pn,ps,pw,pe),(fn,fs,fw,fe)):
-			c = (pmean-p)*f*fc/2.0
+			c = (pmean-p)*f*fc/xftotal
 			t.add_pres(air=pl_air*c, plasma=pl_plasma*c, toxins=pl_toxins*c, heat=pl_heat*c)
 			c = -c
 			self.add_pres(air=pl_air*c, plasma=pl_plasma*c, toxins=pl_toxins*c, heat=pl_heat*c)
@@ -197,7 +204,8 @@ class Tile:
 		pn, ps, pw, pe = (t.get_pres() for t in (tn,ts,tw,te))
 		
 		# return delta
-		return abs((pn-pc)*fn + (ps-pc)*fs + (pw-pc)*fw + (pe-pc)*fe)*fc
+		#return abs((pn-pc)*fn + (ps-pc)*fs + (pw-pc)*fw + (pe-pc)*fe)*fc
+		return (abs(pn-pc)*fn + abs(ps-pc)*fs + abs(pw-pc)*fw + abs(pe-pc)*fe)*fc
 	
 	def get_pres(self):
 		return self.get_pres_air() + self.get_pres_plasma() + self.get_pres_toxins()
