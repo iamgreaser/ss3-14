@@ -1,4 +1,5 @@
 Space Station 3-14
+
 A Space Station 13 clone written for a real platform
 
 Copyright (C) 2012, Abendsfrühstücken.
@@ -33,10 +34,14 @@ Current state of affairs:
 * We have a world editor. Keys for this are:
  * Arrow keys: Move
  * [ and ]: Select tile
- * P: Pressure view
+ * Space: Place a tile
+ * Tab: Toggle "draw mode"
+ * Enter: Pick a tile
+ * P: Toggle "pressure view"
  * Shift-P: Add air pressure
  * T: Tick
  * Shift-T: Full tick
- * R: Run
+ * R: Run / Stop
  * E: "Touch" an object
+
 

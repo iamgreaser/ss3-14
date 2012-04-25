@@ -481,7 +481,7 @@ class WorldEditor:
 			self.camy = self.cury-((gsh-1)-1)
 		
 		self.world.flush_draw_queue(self.ws)
-		self.ws.overwrite(self.gs, self.camy, self.camx, 0, 0, gsh-2, gsw-1)
+		self.ws.overwrite(self.gs, self.camy, self.camx, 0, 0, min(h, gsh-2), min(w, gsw-1))
 		self.gs.addstr(gsh-1,0,"[%i,%i]" % (self.curx, self.cury))
 		self.gs.clrtoeol()
 		self.gs.addstr(gsh-1,20,"WldT: [ ] %s" % (self.world.g[self.cury][self.curx].type_name))
