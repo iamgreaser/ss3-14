@@ -39,7 +39,7 @@ import curses
 
 VIS_GRADIENT = " .,:;!i$@#"
 ATMOS_MIN_DELTA = 0.002
-ATMOS_MIN_PRESSURE = 0.002
+ATMOS_MIN_PRESSURE = 0.01
 ATMOS_MIN_FLOW = 0.00002
 ATMOS_UPDATES_PER_TICK = 500
 
@@ -69,7 +69,7 @@ class Tile:
 	ch = "?"
 	col = 0x07
 	solid = False
-	pres_lvl_air = 1.0
+	pres_lvl_air = 0.98
 	pres_lvl_plasma = 0.0
 	pres_lvl_toxins = 0.0
 	pres_flow = 0.98
@@ -177,10 +177,26 @@ class Tile:
 		pl_heat = self.get_heat() # TODO: split this into pressure and heat?
 		
 		for t,p,f in zip((tn,ts,tw,te),(pn,ps,pw,pe),(fn,fs,fw,fe)):
+			# calculate pressure to transfer
 			c = (pmean-p)*f*fc/xftotal
-			t.add_pres(air=pl_air*c, plasma=pl_plasma*c, toxins=pl_toxins*c, heat=pl_heat*c)
+			
+			# calculate total for gas proportions
+			xd = p+pc
+			if xd < ATMOS_MIN_PRESSURE:
+				# the pressure is too low to work out the gas proportions
+				# don't transfer a damn thing
+				continue
+			
+			# calculate gas proportions
+			xpl_air = (pl_air + t.get_pres_air())/xd
+			xpl_plasma = (pl_plasma + t.get_pres_plasma())/xd
+			xpl_toxins = (pl_toxins + t.get_pres_toxins())/xd
+			xpl_heat = (pl_heat + t.get_heat())/xd
+			
+			# transfer pressure
+			t.add_pres(air=xpl_air*c, plasma=xpl_plasma*c, toxins=xpl_toxins*c, heat=xpl_heat*c)
 			c = -c
-			self.add_pres(air=pl_air*c, plasma=pl_plasma*c, toxins=pl_toxins*c, heat=pl_heat*c)
+			self.add_pres(air=xpl_air*c, plasma=xpl_plasma*c, toxins=xpl_toxins*c, heat=xpl_heat*c)
 		
 		if pl_air < ATMOS_MIN_PRESSURE:
 			self.pres_lvl_air = 0.0
@@ -196,7 +212,7 @@ class Tile:
 		# get flows
 		fc = self.get_pres_flow()
 		if fc == 0.0:
-			return # don't change pressure if it can't flow at all
+			return 0.0 # don't change pressure if it can't flow at all
 		fn, fs, fw, fe = (t.get_pres_flow() for t in (tn,ts,tw,te))
 		
 		# get pressures
@@ -577,12 +593,20 @@ class WorldEditor:
 		self.ws.overwrite(self.gs, self.camy, self.camx, 0, 0, min(h, gsh-2), min(w, gsw-1))
 		self.gs.addstr(gsh-1,0,"[%i,%i]" % (self.curx, self.cury))
 		self.gs.clrtoeol()
-		self.gs.addstr(gsh-1,20,"WldT: [ ] %s" % (self.world.g[self.cury][self.curx].type_name))
-		self.gs.addstr(gsh-1,27,self.world.g[self.cury][self.curx].get_ch())
-		self.gs.addstr(gsh-1,40,"%s: %4i [ ] %s" % ("DRAW" if self.autodraw else "PicT"
+		self.gs.addstr(gsh-1,10,"WldT: [ ] %s" % (self.world.g[self.cury][self.curx].type_name))
+		self.gs.addstr(gsh-1,17,self.world.g[self.cury][self.curx].get_ch())
+		self.gs.addstr(gsh-1,35,"%s: %3i [ ] %s" % ("DRAW" if self.autodraw else "PicT"
 			, self.picked_tile, TILE_EXAMPLES[self.picked_tile].type_name))
-		self.gs.addstr(gsh-1,47+5,TILE_EXAMPLES[self.picked_tile].get_ch())
+		self.gs.addstr(gsh-1,42+4,TILE_EXAMPLES[self.picked_tile].get_ch())
 		self.gs.addstr(gsh-1,70,"ATM: %i" % len(self.world.atmos_queue))
+		#q = self.world.g[self.cury][self.curx].get_atmos_delta(
+		#	self.world.g[self.cury-1][self.curx],
+		#	self.world.g[self.cury+1][self.curx],
+		#	self.world.g[self.cury][self.curx-1],
+		#	self.world.g[self.cury][self.curx+1],
+		#)
+		#self.gs.addstr(gsh-1,60,"%.5f" % (q or 0.0))
+		self.gs.addstr(gsh-1,60,"%.5f" % self.world.g[self.cury][self.curx].get_pres())
 		self.gs.addstr(self.cury - self.camy, self.curx - self.camx, "")
 		self.gs.refresh()
 	
