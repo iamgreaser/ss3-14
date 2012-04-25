@@ -79,6 +79,49 @@ class Tile:
 		self.world = world
 		self.x, self.y = x,y
 	
+	def save(self, fp):
+		# store ch, col
+		# we must ensure at least one byte is written wrt ch
+		fp.write(chr(ord(self.ch))+chr(self.col))
+		
+		# store flags
+		fp.write(chr(0
+			| (1 if self.solid else 0) # bit 0 = solid
+		))
+		
+		# store atmos crap
+		# note, floats must be used because pressure can get very, very high
+		fp.write(struct.pack("<ffffff"
+			,self.get_pres_air(), self.get_pres_plasma(), self.get_pres_toxins(), self.get_pres_flow()
+			,self.get_heat(), self.get_heat_flow()))
+		
+		# store anything else this tile needs
+		self.save_extra(fp)
+	
+	def load(self, fp):
+		# load ch, col
+		self.ch = fp.read(1)
+		self.col = ord(fp.read(1))
+		
+		# load flags
+		flags = ord(fp.read(1))
+		self.solid = not not (flags & 1) # bit 0 = solid
+		
+		# load atmos crap
+		(
+			self.pres_lvl_air, self.pres_lvl_plasma, self.pres_lvl_toxins, self.pres_flow,
+			self.heat_lvl, self.heat_flow
+		) = struct.unpack("<ffffff",fp.read(4*6))
+		
+		# load anything else this tile needs
+		self.load_extra(fp)
+	
+	def save_extra(self, fp):
+		pass
+	
+	def load_extra(self, fp):
+		pass
+	
 	def add_pres(self, air=0.0, plasma=0.0, toxins=0.0, heat=0.0):
 		self.pres_lvl_air += air
 		self.pres_lvl_plasma += plasma
@@ -248,6 +291,17 @@ class DoorTile(Tile):
 	
 	door_is_open = False
 	
+	def save_extra(self, fp):
+		# flags
+		fp.write(chr(0
+			| (1 if self.door_is_open else 0) # bit 0 = door_is_open
+		))
+	
+	def load_extra(self, fp):
+		# flags
+		flags = ord(fp.read(1))
+		self.door_is_open = not not (flags & 1) # bit 0 = door_is_open
+	
 	def on_touch(self, entity=None, item=None):
 		# TODO: permissions
 		self.door_is_open = not self.door_is_open
@@ -279,6 +333,35 @@ class TankTile(Tile):
 	pres_flow = 0.0
 	pres_lvl_air = 0.0
 
+TILE_TYPES = [
+	SpaceTile,FloorTile,WallTile,
+	DoorTile,ValveTile,TankTile,
+]
+
+TILE_EXAMPLES = [t(None,-1,-1) for t in TILE_TYPES]
+
+def load_new_world(fname):
+	fp = open(fname, "rb")
+	
+	magic = fp.read(8)
+	if magic != "SS3-14\x1A\x01":
+		raise WorldFormatException("not an SS3-14 v1 world")
+	
+	w, h = struct.unpack("<HH", fp.read(4))
+	world = GameWorld(w, h)
+	
+	for y in xrange(h):
+		for x in xrange(w):
+			tt, = struct.unpack("<h",fp.read(2))
+			tc = BorderTile if tt == -1 else TILE_TYPES[tt]
+			t = tc(world, x, y)
+			t.load(fp)
+			world.g[y][x] = t
+	
+	fp.close()
+	
+	return world
+
 class GameWorld:
 	class WorldFormatException(Exception):
 		pass
@@ -299,6 +382,21 @@ class GameWorld:
 				for y in xrange(h-2)]
 			+ [[BorderTile(self,x,h-1) for x in xrange(w)]]
 		)
+	
+	def save_world(self, fname):
+		fp = open(fname, "wb")
+		fp.write("SS3-14\x1A\x01")
+		fp.write(struct.pack("<HH", self.w, self.h))
+		
+		for y in xrange(self.h):
+			for x in xrange(self.w):
+				t = self.g[y][x]
+				tc = t.__class__
+				tt = -1 if tc == BorderTile else TILE_TYPES.index(tc)
+				fp.write(struct.pack("<h", tt))
+				t.save(fp)
+		
+		fp.close()
 	
 	def defer_draw_tile(self, x, y):
 		if (x,y) not in self.draw_set:
@@ -371,18 +469,6 @@ class GameWorld:
 		
 		return ((ps-pn), te-tw)
 	
-	def load_world(fname):
-		fp = open(fname,"rb")
-		
-		magic = fp.read(8)
-		if magic != "SS3-14\x1A\x01":
-			raise WorldFormatException("not an SS3-14 v1 world")
-		
-		w, h = struct.unpack("<HH", fp.read(4))
-		world = GameWorld(w, h)
-		
-		fp.close()
-	
 	def get_size(self):
 		return self.w, self.h
 	
@@ -444,15 +530,14 @@ class Game:
 		self.world = GameWorld.load_world(fname)
 
 class WorldEditor:
-	tile_types = [
-		SpaceTile,FloorTile,WallTile,
-		DoorTile,ValveTile,TankTile,
-	]
-	
-	tile_examples = [t(None,-1,-1) for t in tile_types]
-	
-	def __init__(self, gs, w=128, h=128):
-		self.world = GameWorld(w, h)
+	def __init__(self, gs, fname, w=128, h=128):
+		self.fname = fname
+		self.world = None
+		try:
+			self.world = load_new_world(fname)
+		except IOError:
+			self.world = GameWorld(w, h) # file didn't exist
+		
 		self.gs = gs
 		gsh, gsw = self.gs.getmaxyx()
 		self.ws = curses.newpad(h+1, w+1) # to get around a bug where (w-1,h-1) is inaccessible
@@ -487,8 +572,8 @@ class WorldEditor:
 		self.gs.addstr(gsh-1,20,"WldT: [ ] %s" % (self.world.g[self.cury][self.curx].type_name))
 		self.gs.addstr(gsh-1,27,self.world.g[self.cury][self.curx].get_ch())
 		self.gs.addstr(gsh-1,40,"%s: %4i [ ] %s" % ("DRAW" if self.autodraw else "PicT"
-			, self.picked_tile, self.tile_examples[self.picked_tile].type_name))
-		self.gs.addstr(gsh-1,47+5,self.tile_examples[self.picked_tile].get_ch())
+			, self.picked_tile, TILE_EXAMPLES[self.picked_tile].type_name))
+		self.gs.addstr(gsh-1,47+5,TILE_EXAMPLES[self.picked_tile].get_ch())
 		self.gs.addstr(gsh-1,70,"ATM: %i" % len(self.world.atmos_queue))
 		self.gs.addstr(self.cury - self.camy, self.curx - self.camx, "")
 		self.gs.refresh()
@@ -499,7 +584,7 @@ class WorldEditor:
 		self.world.enqueue_atmos_update(x,y)
 	
 	def put_tile_cur(self):
-		self.put_tile(self.curx, self.cury, self.tile_types[self.picked_tile](self.world, self.curx, self.cury))
+		self.put_tile(self.curx, self.cury, TILE_TYPES[self.picked_tile](self.world, self.curx, self.cury))
 	
 	def check_autodraw(self):
 		if self.autodraw:
@@ -532,11 +617,11 @@ class WorldEditor:
 			elif k == "[":
 				self.picked_tile = max(0, self.picked_tile-1)
 			elif k == "]":
-				self.picked_tile = min(len(self.tile_types)-1, self.picked_tile+1)
+				self.picked_tile = min(len(TILE_TYPES)-1, self.picked_tile+1)
 			elif k == " ":
 				self.put_tile_cur()
 			elif k == "\n":
-				npt = self.tile_types.index(self.world.g[self.cury][self.curx].__class__)
+				npt = TILE_TYPES.index(self.world.g[self.cury][self.curx].__class__)
 				if npt != -1:
 					self.picked_tile = npt
 			elif k == "\t":
@@ -556,7 +641,8 @@ class WorldEditor:
 				self.world.g[self.cury][self.curx].add_pres(air=1.0)
 			elif k == "e":
 				self.world.g[self.cury][self.curx].on_touch()
-				
+			elif k == "S":
+				self.world.save_world(self.fname)
 			
 			if self.running:
 				self.world.tick(self.ws)
@@ -564,12 +650,14 @@ class WorldEditor:
 			self.update_screen()
 			time.sleep(0.02)
 
+working_fname = sys.argv[1]
+
 try:
 	gs = curses.initscr()
 	gs.clear()
 	gs.nodelay(1)
 	curses.noecho()
-	we = WorldEditor(gs,128,128)
+	we = WorldEditor(gs,working_fname,128,128)
 	we.run()
 finally:
 	curses.endwin()
