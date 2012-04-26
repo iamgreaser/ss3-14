@@ -38,10 +38,13 @@ import math, heapq
 import curses
 
 VIS_GRADIENT = " .,:;!i$@#"
-ATMOS_MIN_DELTA = 0.002
+ATMOS_MIN_DELTA = 0.01
 ATMOS_MIN_PRESSURE = 0.01
+ATMOS_MIN_MIX_PRESSURE = 0.0001
 ATMOS_MIN_FLOW = 0.00002
 ATMOS_UPDATES_PER_TICK = 500
+ATMOS_UPDATES_FRAME_FACTOR = 0.01
+ATMOS_FLOW_ADJUST = 0.95
 
 def get_gradient(v, l, h):
 	iv = v
@@ -52,6 +55,78 @@ def get_gradient(v, l, h):
 	v = int(v)
 	assert v >= 0 and v < len(VIS_GRADIENT), "%i %s %s %s %s" % (v, iv, fv, l, h)
 	return VIS_GRADIENT[v]
+
+class EditFailureException(Exception):
+	pass
+
+class Editable:
+	def __init__(self, ws, x, y, v):
+		self.ws = ws
+		self.x = x
+		self.y = y
+		self.set_value(v)
+	
+	def set_value(self, v):
+		self.v = v
+	
+	def get_value(self):
+		return self.v
+	
+	def draw(self):
+		pass
+	
+	def edit_key_normal(self, k):
+		pass
+	
+	def edit_key_special(self, k):
+		pass
+	
+	def edit_focus(self):
+		pass
+
+class StringEditable(Editable):
+	curx = 0
+	camx = 0
+	width = 30
+	
+	def get_value(self):
+		try:
+			return self.string_parse(self.v)
+		except Exception, e:
+			raise EditFailureException(e)
+	
+	def string_parse(self, v):
+		return v
+	
+	def draw(self):
+		if self.curx < self.camx:
+			self.camx = self.curx
+		if self.curx >= self.camx+self.width:
+			self.camx = self.curx-(self.width-1)
+		self.ws.addstr(self.y, self.x, self.v[self.camx:self.camx+self.width])
+		self.ws.addstr(self.y, self.x+self.curx, "")
+	
+	def edit_key_normal(self, k):
+		self.v = self.v[:self.curx] + k + self.v[self.curx:]
+	
+	def edit_key_special(self, k):
+		if k == "backspace":
+			if self.curx > 0:
+				self.v = self.v[:self.curx-1] + self.v[self.curx:]
+		elif k == "delete":
+			if self.curx < len(self.v):
+				self.v = self.v[:self.curx] + self.v[self.curx+1:]
+		elif k == "left":
+			self.curx = max(0, self.curx-1)
+		elif k == "right":
+			self.curx = min(len(self.v), self.curx)
+
+class FloatEditable(StringEditable):
+	def set_value(self, v):
+		self.v = "%.5f" % v
+	
+	def string_parse(self, v):
+		return float(v)
 
 class Entity:
 	type_name = "EDOOFUS:defineme!"
@@ -69,10 +144,10 @@ class Tile:
 	ch = "?"
 	col = 0x07
 	solid = False
-	pres_lvl_air = 0.98
+	pres_lvl_air = 1.0
 	pres_lvl_plasma = 0.0
 	pres_lvl_toxins = 0.0
-	pres_flow = 0.98
+	pres_flow = 1.0
 	heat_lvl = 293.15 # 293.15 Kelvin == 20 Celcius
 	heat_flow = 0.9
 	
@@ -159,11 +234,11 @@ class Tile:
 		if ftotal < ATMOS_MIN_FLOW:
 			return # don't change pressure if it can't flow adequately
 		
-		# calculate total and mean pressure
-		pctotal = pn+ps+pw+pe
+		# calculate various pressure values
+		pctotal = pn*fn+ps*fs+pw*fw+pe*fe
 		ptotal = pc+pctotal
-		pmean = ptotal/5.0
-		xftotal = fn+fs+fw+fe+1.0
+		xftotal = ftotal+1.0
+		pmean = pctotal/xftotal
 		
 		# NOTE:
 		# if fn,fs,fw,fe all == 1.0, then end result must be that pc==pn==ps==pw==pe.
@@ -178,13 +253,16 @@ class Tile:
 		
 		for t,p,f in zip((tn,ts,tw,te),(pn,ps,pw,pe),(fn,fs,fw,fe)):
 			# calculate pressure to transfer
-			c = (pmean-p)*f*fc/xftotal
+			#c = (pmean-p)*f*fc*ATMOS_FLOW_ADJUST/xftotal
+			c = (pmean-p)*f*fc/5.0
 			
 			# calculate total for gas proportions
 			xd = p+pc
-			if xd < ATMOS_MIN_PRESSURE:
+			if xd < ATMOS_MIN_MIX_PRESSURE:
 				# the pressure is too low to work out the gas proportions
 				# don't transfer a damn thing
+				self.world.enqueue_atmos_update(t.x, t.y)
+				t.collapse_pres()
 				continue
 			
 			# calculate gas proportions
@@ -197,16 +275,21 @@ class Tile:
 			t.add_pres(air=xpl_air*c, plasma=xpl_plasma*c, toxins=xpl_toxins*c, heat=xpl_heat*c)
 			c = -c
 			self.add_pres(air=xpl_air*c, plasma=xpl_plasma*c, toxins=xpl_toxins*c, heat=xpl_heat*c)
+			t.collapse_pres()
 		
-		if pl_air < ATMOS_MIN_PRESSURE:
+		self.collapse_pres()
+		
+		self.world.enqueue_atmos_update(self.x, self.y)
+	
+	def collapse_pres(self):
+		if self.get_pres_air() < ATMOS_MIN_PRESSURE:
 			self.pres_lvl_air = 0.0
-		if pl_plasma < ATMOS_MIN_PRESSURE:
+		if self.get_pres_plasma() < ATMOS_MIN_PRESSURE:
 			self.pres_lvl_plasma = 0.0
-		if pl_toxins < ATMOS_MIN_PRESSURE:
+		if self.get_pres_toxins() < ATMOS_MIN_PRESSURE:
 			self.pres_lvl_toxins = 0.0
-		if pl_heat < ATMOS_MIN_PRESSURE:
+		if self.get_heat() < ATMOS_MIN_PRESSURE:
 			self.heat_lvl = 0.0
-		
 	
 	def get_atmos_delta(self, tn, ts, tw, te):
 		# get flows
@@ -258,7 +341,14 @@ class Tile:
 		return self.ch
 	
 	def get_editables(self):
-		return {}
+		return {
+			"pres_lvl_air" : FloatEditable,
+			"pres_lvl_plasma" : FloatEditable,
+			"pres_lvl_toxins" : FloatEditable,
+			"pres_flow" : FloatEditable,
+			"heat_lvl" : FloatEditable,
+			#"heat_flow" : FloatEditable, # TODO?
+		}
 	
 	def on_touch(self, entity=None, item=None):
 		pass
@@ -390,6 +480,8 @@ class GameWorld:
 	class WorldFormatException(Exception):
 		pass
 	
+	ftime = 0
+	
 	def __init__(self, w, h):
 		self.w, self.h = w, h
 		
@@ -506,7 +598,7 @@ class GameWorld:
 		tp = t.get_atmos_delta(tn, ts, tw, te)
 		
 		if tp > ATMOS_MIN_DELTA:
-			heapq.heappush(self.atmos_queue, (-tp, (x,y)))
+			heapq.heappush(self.atmos_queue, (-(tp-self.ftime*ATMOS_UPDATES_FRAME_FACTOR), (x,y)))
 			self.atmos_set.add((x,y))
 	
 	def flush_draw_queue(self, ws):
@@ -517,6 +609,7 @@ class GameWorld:
 		self.draw_set = set()
 	
 	def tick(self, ws):
+		self.ftime += 1
 		l = [heapq.heappop(self.atmos_queue)
 			for i in xrange(min(len(self.atmos_queue),ATMOS_UPDATES_PER_TICK))]
 		
