@@ -56,6 +56,12 @@ def get_gradient(v, l, h):
 	assert v >= 0 and v < len(VIS_GRADIENT), "%i %s %s %s %s" % (v, iv, fv, l, h)
 	return VIS_GRADIENT[v]
 
+def get_twogradient(v, l, m, h):
+	if v < m:
+		return get_gradient(v, l, m)
+	else:
+		return get_gradient(-v, -h, -m)
+
 class EditFailureException(Exception):
 	pass
 
@@ -391,6 +397,8 @@ class SpaceTile(Tile):
 	ch = " "
 	solid = False
 	pres_lvl_air = 0.0
+	pres_tol_min = 4.0
+	pres_tol_max = 15.0
 	heat_lvl = 0.0
 
 class BorderTile(SpaceTile):
@@ -419,12 +427,15 @@ class FloorTile(Tile):
 	type_name = "Floor"
 	ch = "."
 	solid = False
+	pres_tol_min = 4.0
+	pres_tol_max = 15.0
 
 class WallTile(Tile):
 	type_name = "Wall"
 	ch = "#"
 	col = 0x07
 	solid = True
+	pres_lvl_air = 4.0
 	pres_flow = 0.0
 	heat_flow = 0.0
 
@@ -572,7 +583,7 @@ class GameWorld:
 		assert x < gsw
 		assert y < gsh
 		
-		ws.addstr(y,x,get_gradient(t.get_pres(), 0.0, t.pres_tol_min))
+		ws.addstr(y,x,get_twogradient(t.get_pres(), 0.0, t.pres_tol_min, t.pres_tol_max))
 	
 	def repaint_on(self, ws):
 		if self.pressure_view:
