@@ -144,10 +144,15 @@ class Tile:
 	ch = "?"
 	col = 0x07
 	solid = False
+	broken = False
 	pres_lvl_air = 1.0
 	pres_lvl_plasma = 0.0
 	pres_lvl_toxins = 0.0
 	pres_flow = 1.0
+	pres_tol_min = 4.5 # leaking point (linear pres_flow->pres_tol_leakmax)
+	pres_tol_max = 5.0 # breaking point
+	pres_tol_leakmax = 0.07 # how much can leak before the thing breaks
+	pres_tol_ch = ";"
 	heat_lvl = 293.15 # 293.15 Kelvin == 20 Celcius
 	heat_flow = 0.9
 	
@@ -163,6 +168,7 @@ class Tile:
 		# store flags
 		fp.write(chr(0
 			| (1 if self.solid else 0) # bit 0 = solid
+			| (2 if self.broken else 0) # bit 1 = broken
 		))
 		
 		# store atmos crap
@@ -182,6 +188,7 @@ class Tile:
 		# load flags
 		flags = ord(fp.read(1))
 		self.solid = not not (flags & 1) # bit 0 = solid
+		self.broken = not not (flags & 2) # bit 1 = broken
 		
 		# load atmos crap
 		(
@@ -197,6 +204,28 @@ class Tile:
 	
 	def load_extra(self, fp):
 		pass
+	
+	def become_broken(self):
+		self.solid = False
+		self.broken = True
+		self.pres_flow = 1.0
+		self.set_ch_col(ch=self.pres_tol_ch)
+	
+	def stress(self, pt):
+		f = self.pres_flow
+		ptf = pt*(1.0-f)
+		if ptf > self.pres_tol_min:
+			f = (
+				(ptf-self.pres_tol_min)
+				*(self.pres_tol_leakmax-self.pres_flow)
+				/(self.pres_tol_max-self.pres_tol_min)
+				+self.pres_flow
+			)
+		if ptf > self.pres_tol_max:
+			self.become_broken()
+			f = self.pres_flow
+		
+		return f
 	
 	def add_pres(self, air=0.0, plasma=0.0, toxins=0.0, heat=0.0):
 		self.pres_lvl_air += air
@@ -219,15 +248,16 @@ class Tile:
 		# there's a lot of "stuff i might need" in here
 		# which isn't actually used --GM
 		
-		# get flows
-		fc = self.get_pres_flow()
-		if fc == 0.0:
-			return # don't change pressure if it can't flow at all
-		fn, fs, fw, fe = (t.get_pres_flow() for t in (tn,ts,tw,te))
-		
 		# get pressures
 		pc = self.get_pres()
 		pn, ps, pw, pe = (t.get_pres() for t in (tn,ts,tw,te))
+		
+		# get flows
+		#fc = self.get_pres_flow()
+		fc = self.stress(pc)
+		if fc == 0.0:
+			return # don't change pressure if it can't flow at all
+		fn, fs, fw, fe = (t.stress(p) for t,p in zip((tn,ts,tw,te),(pn,ps,pw,pe)) )
 		
 		# calculate total flow
 		ftotal = fn+fs+fw+fe
@@ -253,8 +283,8 @@ class Tile:
 		
 		for t,p,f in zip((tn,ts,tw,te),(pn,ps,pw,pe),(fn,fs,fw,fe)):
 			# calculate pressure to transfer
-			#c = (pmean-p)*f*fc*ATMOS_FLOW_ADJUST/xftotal
-			c = (pmean-p)*f*fc/5.0
+			#c = (pmean-p)*fc*ATMOS_FLOW_ADJUST/xftotal
+			c = (pmean-p)*fc*ATMOS_FLOW_ADJUST/5.0
 			
 			# calculate total for gas proportions
 			xd = p+pc
@@ -272,9 +302,10 @@ class Tile:
 			xpl_heat = (pl_heat + t.get_heat())/xd
 			
 			# transfer pressure
-			t.add_pres(air=xpl_air*c, plasma=xpl_plasma*c, toxins=xpl_toxins*c, heat=xpl_heat*c)
+			flow = t.stress(xd*c)
+			t.add_pres(air=xpl_air*c*flow, plasma=xpl_plasma*c*flow, toxins=xpl_toxins*c*flow, heat=xpl_heat*c*flow)
 			c = -c
-			self.add_pres(air=xpl_air*c, plasma=xpl_plasma*c, toxins=xpl_toxins*c, heat=xpl_heat*c)
+			self.add_pres(air=xpl_air*c*flow, plasma=xpl_plasma*c*flow, toxins=xpl_toxins*c*flow, heat=xpl_heat*c*flow)
 			t.collapse_pres()
 		
 		self.collapse_pres()
