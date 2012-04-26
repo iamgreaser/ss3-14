@@ -149,9 +149,9 @@ class Tile:
 	pres_lvl_plasma = 0.0
 	pres_lvl_toxins = 0.0
 	pres_flow = 1.0
-	pres_tol_min = 4.5 # leaking point (linear pres_flow->pres_tol_leakmax)
+	pres_tol_min = 4.0 # leaking point (linear pres_flow->pres_tol_leakmax)
 	pres_tol_max = 5.0 # breaking point
-	pres_tol_leakmax = 0.07 # how much can leak before the thing breaks
+	pres_tol_leakmax = 0.2 # how much can leak before the thing breaks
 	pres_tol_ch = ";"
 	heat_lvl = 293.15 # 293.15 Kelvin == 20 Celcius
 	heat_flow = 0.9
@@ -211,16 +211,19 @@ class Tile:
 		self.pres_flow = 1.0
 		self.set_ch_col(ch=self.pres_tol_ch)
 	
-	def stress(self, pt):
+	def stress(self, pt, toself):
 		f = self.pres_flow
 		ptf = pt*(1.0-f)
-		if ptf > self.pres_tol_min:
+		#xmin = 1.0 if toself else self.pres_tol_min
+		xmin = self.pres_tol_min
+		if ptf > xmin:
 			f = (
-				(ptf-self.pres_tol_min)
+				(ptf-xmin)
 				*(self.pres_tol_leakmax-self.pres_flow)
-				/(self.pres_tol_max-self.pres_tol_min)
+				/(self.pres_tol_max-xmin)
 				+self.pres_flow
 			)
+		#ptf = pt*(1.0-f)
 		if ptf > self.pres_tol_max:
 			self.become_broken()
 			f = self.pres_flow
@@ -254,10 +257,10 @@ class Tile:
 		
 		# get flows
 		#fc = self.get_pres_flow()
-		fc = self.stress(pc)
+		fc = self.stress(pc, toself=True)
 		if fc == 0.0:
 			return # don't change pressure if it can't flow at all
-		fn, fs, fw, fe = (t.stress(p) for t,p in zip((tn,ts,tw,te),(pn,ps,pw,pe)) )
+		fn, fs, fw, fe = (t.stress(p, toself=False) for t,p in zip((tn,ts,tw,te),(pn,ps,pw,pe)) )
 		
 		# calculate total flow
 		ftotal = fn+fs+fw+fe
@@ -268,7 +271,7 @@ class Tile:
 		pctotal = pn*fn+ps*fs+pw*fw+pe*fe
 		ptotal = pc+pctotal
 		xftotal = ftotal+1.0
-		pmean = pctotal/xftotal
+		pmean = ptotal/xftotal
 		
 		# NOTE:
 		# if fn,fs,fw,fe all == 1.0, then end result must be that pc==pn==ps==pw==pe.
@@ -283,7 +286,6 @@ class Tile:
 		
 		for t,p,f in zip((tn,ts,tw,te),(pn,ps,pw,pe),(fn,fs,fw,fe)):
 			# calculate pressure to transfer
-			#c = (pmean-p)*fc*ATMOS_FLOW_ADJUST/xftotal
 			c = (pmean-p)*fc*ATMOS_FLOW_ADJUST/5.0
 			
 			# calculate total for gas proportions
@@ -302,7 +304,7 @@ class Tile:
 			xpl_heat = (pl_heat + t.get_heat())/xd
 			
 			# transfer pressure
-			flow = t.stress(xd*c)
+			flow = t.stress(xd*c, toself=False)
 			t.add_pres(air=xpl_air*c*flow, plasma=xpl_plasma*c*flow, toxins=xpl_toxins*c*flow, heat=xpl_heat*c*flow)
 			c = -c
 			self.add_pres(air=xpl_air*c*flow, plasma=xpl_plasma*c*flow, toxins=xpl_toxins*c*flow, heat=xpl_heat*c*flow)
@@ -323,15 +325,15 @@ class Tile:
 			self.heat_lvl = 0.0
 	
 	def get_atmos_delta(self, tn, ts, tw, te):
-		# get flows
-		fc = self.get_pres_flow()
-		if fc == 0.0:
-			return 0.0 # don't change pressure if it can't flow at all
-		fn, fs, fw, fe = (t.get_pres_flow() for t in (tn,ts,tw,te))
-		
 		# get pressures
 		pc = self.get_pres()
 		pn, ps, pw, pe = (t.get_pres() for t in (tn,ts,tw,te))
+		
+		# get flows
+		fc = self.stress(pc, toself=True)
+		if fc == 0.0:
+			return 0.0 # don't change pressure if it can't flow at all
+		fn, fs, fw, fe = (t.stress(pc*ATMOS_FLOW_ADJUST/5.0, toself=False) for t,p in zip((tn,ts,tw,te),(pn,ps,pw,pe)) )
 		
 		# return delta
 		#return abs((pn-pc)*fn + (ps-pc)*fs + (pw-pc)*fw + (pe-pc)*fe)*fc
@@ -476,7 +478,10 @@ class TankTile(Tile):
 	col = 0x07
 	solid = True
 	pres_flow = 0.0
-	pres_lvl_air = 0.0
+	pres_lvl_air = 250.0
+	pres_tol_min = 300.0
+	pres_tol_max = 350.0
+	pres_tol_leakmax = 0.01
 
 TILE_TYPES = [
 	SpaceTile,FloorTile,WallTile,
@@ -567,7 +572,7 @@ class GameWorld:
 		assert x < gsw
 		assert y < gsh
 		
-		ws.addstr(y,x,get_gradient(t.get_pres(), 0.0, 1.0))
+		ws.addstr(y,x,get_gradient(t.get_pres(), 0.0, t.pres_tol_min))
 	
 	def repaint_on(self, ws):
 		if self.pressure_view:
