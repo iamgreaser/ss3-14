@@ -46,6 +46,8 @@ ATMOS_UPDATES_PER_TICK = 500
 ATMOS_UPDATES_FRAME_FACTOR = 0.01
 ATMOS_FLOW_ADJUST = 0.95
 
+DIR_LIST_NSWE = [(0,-1),(0,1),(-1,0),(1,0)]
+
 def get_gradient(v, l, h):
 	iv = v
 	v = max(l, min(h, v))
@@ -217,22 +219,25 @@ class Tile:
 		self.pres_flow = 1.0
 		self.set_ch_col(ch=self.pres_tol_ch)
 	
-	def stress(self, pt, toself):
-		f = self.pres_flow
+	def stress(self, pt, (u,v)):
+		if self.broken:
+			return 1.0
+		
+		f = self.get_pres_flow((u,v))
 		ptf = pt*(1.0-f)
 		#xmin = 1.0 if toself else self.pres_tol_min
 		xmin = self.pres_tol_min
 		if ptf > xmin:
 			f = (
 				(ptf-xmin)
-				*(self.pres_tol_leakmax-self.pres_flow)
+				*(self.pres_tol_leakmax-f)
 				/(self.pres_tol_max-xmin)
-				+self.pres_flow
+				+f
 			)
 		#ptf = pt*(1.0-f)
 		if ptf > self.pres_tol_max:
 			self.become_broken()
-			f = self.pres_flow
+			return 1.0
 		
 		return f
 	
@@ -258,15 +263,16 @@ class Tile:
 		# which isn't actually used --GM
 		
 		# get pressures
-		pc = self.get_pres()
-		pn, ps, pw, pe = (t.get_pres() for t in (tn,ts,tw,te))
+		pc = self.get_pres((0,0))
+		pn, ps, pw, pe = (t.get_pres((u,v)) for t,(u,v) in zip((tn,ts,tw,te),DIR_LIST_NSWE) )
 		
 		# get flows
 		#fc = self.get_pres_flow()
-		fc = self.stress(pc, toself=True)
+		fc = self.stress(pc, (0,0))
 		if fc == 0.0:
 			return # don't change pressure if it can't flow at all
-		fn, fs, fw, fe = (t.stress(p, toself=False) for t,p in zip((tn,ts,tw,te),(pn,ps,pw,pe)) )
+		fn, fs, fw, fe = (t.stress(p, (u,v)) for t,p,(u,v) in 
+			zip((tn,ts,tw,te),(pn,ps,pw,pe),DIR_LIST_NSWE) )
 		
 		# calculate total flow
 		ftotal = fn+fs+fw+fe
@@ -290,7 +296,7 @@ class Tile:
 		pl_toxins = self.get_pres_toxins()
 		pl_heat = self.get_heat() # TODO: split this into pressure and heat?
 		
-		for t,p,f in zip((tn,ts,tw,te),(pn,ps,pw,pe),(fn,fs,fw,fe)):
+		for t,p,f,(u,v) in zip((tn,ts,tw,te),(pn,ps,pw,pe),(fn,fs,fw,fe),DIR_LIST_NSWE):
 			# calculate pressure to transfer
 			c = (pmean-p)*fc*ATMOS_FLOW_ADJUST/5.0
 			
@@ -310,7 +316,7 @@ class Tile:
 			xpl_heat = (pl_heat + t.get_heat())/xd
 			
 			# transfer pressure
-			flow = t.stress(xd*c, toself=False)
+			flow = t.stress(xd*c, (u,v))
 			t.add_pres(air=xpl_air*c*flow, plasma=xpl_plasma*c*flow, toxins=xpl_toxins*c*flow, heat=xpl_heat*c*flow)
 			c = -c
 			self.add_pres(air=xpl_air*c*flow, plasma=xpl_plasma*c*flow, toxins=xpl_toxins*c*flow, heat=xpl_heat*c*flow)
@@ -332,20 +338,21 @@ class Tile:
 	
 	def get_atmos_delta(self, tn, ts, tw, te):
 		# get pressures
-		pc = self.get_pres()
-		pn, ps, pw, pe = (t.get_pres() for t in (tn,ts,tw,te))
+		pc = self.get_pres((0,0))
+		pn, ps, pw, pe = (t.get_pres((u,v)) for t,(u,v) in zip((tn,ts,tw,te),DIR_LIST_NSWE) )
 		
 		# get flows
-		fc = self.stress(pc, toself=True)
+		fc = self.stress(pc, (0,0))
 		if fc == 0.0:
 			return 0.0 # don't change pressure if it can't flow at all
-		fn, fs, fw, fe = (t.stress(pc*ATMOS_FLOW_ADJUST/5.0, toself=False) for t,p in zip((tn,ts,tw,te),(pn,ps,pw,pe)) )
+		fn, fs, fw, fe = (t.stress(pc*ATMOS_FLOW_ADJUST/5.0, (u,v)) for t,p,(u,v)
+			in zip((tn,ts,tw,te),(pn,ps,pw,pe),DIR_LIST_NSWE) )
 		
 		# return delta
 		#return abs((pn-pc)*fn + (ps-pc)*fs + (pw-pc)*fw + (pe-pc)*fe)*fc
 		return (abs(pn-pc)*fn + abs(ps-pc)*fs + abs(pw-pc)*fw + abs(pe-pc)*fe)*fc
 	
-	def get_pres(self):
+	def get_pres(self, (u,v)=(None,None)):
 		return self.get_pres_air() + self.get_pres_plasma() + self.get_pres_toxins()
 	
 	def get_pres_air(self):
@@ -357,13 +364,13 @@ class Tile:
 	def get_pres_toxins(self):
 		return self.pres_lvl_toxins
 	
-	def get_pres_flow(self):
-		v = self.pres_flow
+	def get_pres_flow(self, (u,v)=(None,None)):
+		r = self.pres_flow
 		
-		if v <= 0.000001:
+		if r <= 0.000001:
 			return 0
 		
-		return v
+		return r
 	
 	def get_heat(self):
 		return self.heat_lvl
@@ -462,7 +469,12 @@ class DoorTile(Tile):
 	
 	def on_touch(self, entity=None, item=None):
 		# TODO: permissions
+		if self.broken:
+			return
+		
 		self.door_is_open = not self.door_is_open
+		
+		self.solid = not self.door_is_open
 		
 		if self.door_is_open:
 			self.set_ch_col(ch="=")
@@ -477,11 +489,45 @@ class DoorTile(Tile):
 
 class ValveTile(Tile):
 	type_name = "Valve"
-	ch = "^"
+	ch = "|"
 	col = 0x07
 	solid = True
 	pres_flow = 0.0
-	pres_lvl_air = 0.0
+	pres_lvl_air = 0.5
+	pres_tol_min = 0.5
+	pres_tol_max = 6.0
+	pres_tol_leakmax = 0.7
+	
+	valve_is_open = False
+	
+	def save_extra(self, fp):
+		# flags
+		fp.write(chr(0
+			| (1 if self.valve_is_open else 0) # bit 0 = valve_is_open
+		))
+	
+	def load_extra(self, fp):
+		# flags
+		flags = ord(fp.read(1))
+		self.valve_is_open = not not (flags & 1) # bit 0 = valve_is_open
+	
+	def on_touch(self, entity=None, item=None):
+		# TODO: permissions
+		if self.broken:
+			return
+		
+		self.valve_is_open = not self.valve_is_open
+		
+		if self.valve_is_open:
+			self.set_ch_col(ch="^")
+			self.pres_flow = 1.0
+			self.heat_flow = 1.0
+		else:
+			self.set_ch_col(ch="|")
+			self.pres_flow = 0.0
+			self.heat_flow = 0.0
+		
+		self.world.enqueue_atmos_update(self.x, self.y)
 
 class TankTile(Tile):
 	type_name = "Tank"
@@ -494,9 +540,71 @@ class TankTile(Tile):
 	pres_tol_max = 350.0
 	pres_tol_leakmax = 0.01
 
+class PumpTile(Tile):
+	type_name = "Pump"
+	ch = "^"
+	col = 0x07
+	solid = False
+	pres_flow = 0.03
+	pres_lvl_air = 1.0
+	pres_tol_min = 100.0
+	pres_tol_max = 150.0
+	pres_tol_leakmax = 0.04
+	
+	pump_dir = 0 # North
+	
+	def save_extra(self, fp):
+		# pump direction
+		fp.write(chr(self.pump_dir))
+	
+	def load_extra(self, fp):
+		# pump direction
+		self.pump_dir = ord(fp.read(1))
+	
+	def on_touch(self, entity=None, item=None):
+		if self.broken:
+			return
+		
+		self.pump_dir = (self.pump_dir+1)&3
+		self.set_ch_col(ch="^v<>"[self.pump_dir])
+		
+		self.world.enqueue_atmos_update(self.x, self.y)
+	
+	def pump_get_params(self):
+		zu,zv = DIR_LIST_NSWE[self.pump_dir]
+		to = self.world.g[self.y+zv][self.x+zu]
+		ti = self.world.g[self.y-zv][self.x-zu]
+		po = to.get_pres((-zu,-zv))
+		pi = to.get_pres((zu,zv))
+		fo = to.get_pres_flow((-zu,-zv))
+		fi = to.get_pres_flow((zu,zv))
+		
+		return zu,zv,to,ti,po,pi,fo,fi
+	
+	def get_pres(self, (u,v)=(None,None)):
+		zu,zv,to,ti,po,pi,fo,fi = self.pump_get_params()
+		
+		rp = Tile.get_pres(self,(u,v))
+		
+		if u == -zu and v == -zv:
+			return rp+min(max(rp,0.0),2.0)
+		elif u == zu and v == zv:
+			return max(0,rp-2.0)
+		else:
+			return rp
+	
+	def get_pres_flow(self, (u,v)=(None,None)):
+		zu,zv,to,ti,po,pi,fo,fi = self.pump_get_params()
+		
+		if u == None or (zu == 0) == (u == 0) or ((u == 0) and (v == 0)):
+			return self.pres_flow
+		else:
+			return 0.0
+
 TILE_TYPES = [
 	SpaceTile,FloorTile,WallTile,
 	DoorTile,ValveTile,TankTile,
+	PumpTile,
 ]
 
 TILE_EXAMPLES = [t(None,-1,-1) for t in TILE_TYPES]
@@ -583,7 +691,7 @@ class GameWorld:
 		assert x < gsw
 		assert y < gsh
 		
-		ws.addstr(y,x,get_twogradient(t.get_pres(), 0.0, t.pres_tol_min, t.pres_tol_max))
+		ws.addstr(y,x,get_twogradient(t.get_pres((0,0)), 0.0, t.pres_tol_min, t.pres_tol_max))
 	
 	def repaint_on(self, ws):
 		if self.pressure_view:
@@ -624,11 +732,11 @@ class GameWorld:
 		te = self.g[y][x+1]
 		
 		fc = tc.get_pres_flow()
-		pc = tc.get_pres()
-		pn = (pc-tn.get_pres())*tn.get_flow()
-		ps = (pc-ts.get_pres())*ts.get_flow()
-		pw = (pc-tw.get_pres())*tw.get_flow()
-		pe = (pc-te.get_pres())*te.get_flow()
+		pc = tc.get_pres((0,0))
+		pn = (pc-tn.get_pres((0,-1)))*tn.get_flow()
+		ps = (pc-ts.get_pres((0,1)))*ts.get_flow()
+		pw = (pc-tw.get_pres((-1,0)))*tw.get_flow()
+		pe = (pc-te.get_pres((1,0)))*te.get_flow()
 		
 		return ((ps-pn), te-tw)
 	
@@ -746,7 +854,7 @@ class WorldEditor:
 		#	self.world.g[self.cury][self.curx+1],
 		#)
 		#self.gs.addstr(gsh-1,60,"%.5f" % (q or 0.0))
-		self.gs.addstr(gsh-1,60,"%.5f" % self.world.g[self.cury][self.curx].get_pres())
+		self.gs.addstr(gsh-1,60,"%.5f" % self.world.g[self.cury][self.curx].get_pres((0,0)))
 		self.gs.addstr(self.cury - self.camy, self.curx - self.camx, "")
 		self.gs.refresh()
 	
