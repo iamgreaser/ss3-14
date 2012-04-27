@@ -33,23 +33,14 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 """
 
-import sys, struct, time
-import math, heapq
-import curses
+VIS_GRADIENT = " .,:;!i$@#"
+ATMOS_MIN_DELTA = 0.01
+ATMOS_MIN_PRESSURE = 0.0001
+ATMOS_MIN_MIX_PRESSURE = 0.00001
+ATMOS_MIN_FLOW = 0.00002
+ATMOS_UPDATES_PER_TICK = 500
+ATMOS_UPDATES_FRAME_FACTOR = 0.01
+ATMOS_FLOW_ADJUST = 0.95
 
-from const import *
-import common
-import editor
-
-working_fname = sys.argv[1]
-
-try:
-	gs = curses.initscr()
-	gs.clear()
-	gs.nodelay(1)
-	curses.noecho()
-	we = editor.WorldEditor(gs,working_fname,128,128)
-	we.run()
-finally:
-	curses.endwin()
+DIR_LIST_NSWE = [(0,-1),(0,1),(-1,0),(1,0)]
 

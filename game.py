@@ -33,23 +33,10 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 """
 
-import sys, struct, time
-import math, heapq
-import curses
-
 from const import *
 import common
-import editor
 
-working_fname = sys.argv[1]
-
-try:
-	gs = curses.initscr()
-	gs.clear()
-	gs.nodelay(1)
-	curses.noecho()
-	we = editor.WorldEditor(gs,working_fname,128,128)
-	we.run()
-finally:
-	curses.endwin()
+class Game:
+	def __init__(self, fname):
+		self.world = GameWorld.load_world(fname)
 

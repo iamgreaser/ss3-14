@@ -33,23 +33,79 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 """
 
-import sys, struct, time
-import math, heapq
-import curses
-
 from const import *
 import common
-import editor
 
-working_fname = sys.argv[1]
+class EditFailureException(Exception):
+	pass
 
-try:
-	gs = curses.initscr()
-	gs.clear()
-	gs.nodelay(1)
-	curses.noecho()
-	we = editor.WorldEditor(gs,working_fname,128,128)
-	we.run()
-finally:
-	curses.endwin()
+class Editable:
+	def __init__(self, ws, x, y, v):
+		self.ws = ws
+		self.x = x
+		self.y = y
+		self.set_value(v)
+	
+	def set_value(self, v):
+		self.v = v
+	
+	def get_value(self):
+		return self.v
+	
+	def draw(self):
+		pass
+	
+	def edit_key_normal(self, k):
+		pass
+	
+	def edit_key_special(self, k):
+		pass
+	
+	def edit_focus(self):
+		pass
+
+class StringEditable(Editable):
+	curx = 0
+	camx = 0
+	width = 30
+	
+	def get_value(self):
+		try:
+			return self.string_parse(self.v)
+		except Exception, e:
+			raise EditFailureException(e)
+	
+	def string_parse(self, v):
+		return v
+	
+	def draw(self):
+		if self.curx < self.camx:
+			self.camx = self.curx
+		if self.curx >= self.camx+self.width:
+			self.camx = self.curx-(self.width-1)
+		self.ws.addstr(self.y, self.x, self.v[self.camx:self.camx+self.width])
+		self.ws.addstr(self.y, self.x+self.curx, "")
+	
+	def edit_key_normal(self, k):
+		self.v = self.v[:self.curx] + k + self.v[self.curx:]
+	
+	def edit_key_special(self, k):
+		if k == "backspace":
+			if self.curx > 0:
+				self.v = self.v[:self.curx-1] + self.v[self.curx:]
+		elif k == "delete":
+			if self.curx < len(self.v):
+				self.v = self.v[:self.curx] + self.v[self.curx+1:]
+		elif k == "left":
+			self.curx = max(0, self.curx-1)
+		elif k == "right":
+			self.curx = min(len(self.v), self.curx)
+
+class FloatEditable(StringEditable):
+	def set_value(self, v):
+		self.v = "%.5f" % v
+	
+	def string_parse(self, v):
+		return float(v)
+
 

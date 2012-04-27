@@ -33,23 +33,22 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 """
 
-import sys, struct, time
-import math, heapq
-import curses
-
 from const import *
-import common
-import editor
 
-working_fname = sys.argv[1]
+def get_gradient(v, l, h):
+	iv = v
+	v = max(l, min(h, v))
+	v = (v-l)/(h-l)
+	v = (v*(len(VIS_GRADIENT)-1)+0.5)
+	fv = v
+	v = int(v)
+	assert v >= 0 and v < len(VIS_GRADIENT), "%i %s %s %s %s" % (v, iv, fv, l, h)
+	return VIS_GRADIENT[v]
 
-try:
-	gs = curses.initscr()
-	gs.clear()
-	gs.nodelay(1)
-	curses.noecho()
-	we = editor.WorldEditor(gs,working_fname,128,128)
-	we.run()
-finally:
-	curses.endwin()
+def get_twogradient(v, l, m, h):
+	if v < m:
+		return get_gradient(v, l, m)
+	else:
+		return get_gradient(-v, -h, -m)
+
 

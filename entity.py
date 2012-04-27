@@ -33,23 +33,17 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 """
 
-import sys, struct, time
-import math, heapq
-import curses
-
 from const import *
 import common
-import editor
 
-working_fname = sys.argv[1]
+class Entity:
+	type_name = "EDOOFUS:defineme!"
+	ch = "?"
+	col = 0x07
+	# yeah, this isn't done yet --GM
 
-try:
-	gs = curses.initscr()
-	gs.clear()
-	gs.nodelay(1)
-	curses.noecho()
-	we = editor.WorldEditor(gs,working_fname,128,128)
-	we.run()
-finally:
-	curses.endwin()
+class PlayerEntity(Entity):
+	type_name = "Player"
+	ch = "@"
+	col = 0x07
 
